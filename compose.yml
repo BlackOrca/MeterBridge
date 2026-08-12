@@ -1,0 +1,32 @@
+services:
+  meterbridge:
+    image: ghcr.io/blackorca/meterbridge:latest
+    container_name: meterbridge
+    restart: unless-stopped
+    # Host-Networking: der Pi trennt bewusst Default-Route (Ethernet, MQTT-
+    # Broker) von einem isolierten WLAN-Netz zum Huawei-Dongle ohne eigene
+    # Default-Route (siehe README). Ein Docker-Bridge-Netz würde diese
+    # Trennung unterlaufen bzw. den Dongle unerreichbar machen.
+    network_mode: host
+    # root, damit GPIO/serielle Geräte unten ohne GID-Abgleich mit dem
+    # Host funktionieren (siehe ContainerUser in MeterBridge.csproj).
+    user: "0:0"
+    devices:
+      # Nicht vorhandene Geräte auf dem jeweiligen Pi hier entfernen,
+      # sonst schlägt "docker compose up" beim Start hart fehl.
+      - /dev/gpiomem:/dev/gpiomem
+      - /dev/gpiochip0:/dev/gpiochip0
+      # - /dev/ttyUSB0:/dev/ttyUSB0
+      - /dev/serial0:/dev/serial0
+    volumes:
+      # Config ohne Image-Rebuild anpassbar; echte Zugangsdaten kommen erst
+      # hier ins Deploy-Verzeichnis auf dem Pi, nicht ins Repo.
+      - ./appsettings.json:/app/appsettings.json:ro
+      # Vor dem ersten "docker compose up" als LEERE DATEI anlegen
+      # (z.B. "touch gasmeter_state.json") - fehlt die Datei auf dem Host,
+      # legt Docker hier sonst ein Verzeichnis an und der Zählerstand wird
+      # nie persistiert (Fehler landet nur als Warning im Log).
+      - ./gasmeter_state.json:/app/data/gasmeter_state.json:rw
+    environment:
+      - TZ=Europe/Berlin
+      - GasMeter__StateFilePath=/app/data/gasmeter_state.json

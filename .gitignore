@@ -1,0 +1,16 @@
+## .NET
+bin/
+obj/
+*.user
+
+## Laufzeit-State (nicht Teil des Quellcodes)
+gasmeter_state.json
+
+## Lokale Deploy-Configs mit echten Zugangsdaten
+appsettings.*.local.json
+
+## Editor/OS
+.vs/
+.vscode/
+*.swp
+Thumbs.db

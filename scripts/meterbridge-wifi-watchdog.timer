@@ -1,0 +1,9 @@
+[Unit]
+Description=Prueft alle 2 Minuten die WLAN-Verbindung zum Huawei-Dongle
+
+[Timer]
+OnBootSec=1min
+OnUnitActiveSec=2min
+
+[Install]
+WantedBy=timers.target

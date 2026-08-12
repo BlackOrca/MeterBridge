@@ -1,0 +1,47 @@
+<Project Sdk="Microsoft.NET.Sdk.Worker">
+
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <InvariantGlobalization>true</InvariantGlobalization>
+    <RootNamespace>MeterBridge</RootNamespace>
+    <!-- Für Deployment auf dem Pi: Runtime-Identifier je nach Pi-Modell/OS anpassen,
+         z.B. linux-arm64 für 64-bit Raspberry Pi OS, linux-arm für 32-bit -->
+    <RuntimeIdentifiers>linux-arm64;linux-arm</RuntimeIdentifiers>
+  </PropertyGroup>
+
+  <!-- Container-Build per "dotnet publish -t:PublishContainer" (kein Dockerfile,
+       siehe scripts/build-push.ps1). Pusht direkt nach ghcr.io. -->
+  <PropertyGroup>
+    <ContainerRegistry>ghcr.io</ContainerRegistry>
+    <ContainerRepository>blackorca/meterbridge</ContainerRepository>
+    <ContainerImageTag>latest</ContainerImageTag>
+    <!-- root, damit der Container ohne GID-Abgleich auf GPIO/seriellen Port
+         des Host-Systems zugreifen kann (Geräte werden gezielt per
+         compose.yml devices: durchgereicht, ohne den privileged-Modus). -->
+    <ContainerUser>root</ContainerUser>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <!-- Verknüpft das GHCR-Package mit dem GitHub-Repo. -->
+    <ContainerLabel Include="org.opencontainers.image.source" Value="https://github.com/blackorca/MeterBridge" />
+    <ContainerLabel Include="org.opencontainers.image.description" Value="Huawei/Stromzähler/Gaszähler → MQTT Bridge für Raspberry Pi" />
+    <ContainerLabel Include="org.opencontainers.image.licenses" Value="MIT" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <PackageReference Include="MQTTnet" Version="4.3.7.1207" />
+    <PackageReference Include="NModbus" Version="3.0.83" />
+    <PackageReference Include="System.Device.Gpio" Version="3.2.0" />
+    <PackageReference Include="System.IO.Ports" Version="10.0.10" />
+    <PackageReference Include="Microsoft.Extensions.Hosting" Version="10.0.0" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <None Update="appsettings.json">
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+    </None>
+  </ItemGroup>
+
+</Project>
