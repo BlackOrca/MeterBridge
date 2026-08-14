@@ -38,6 +38,19 @@ public sealed class HomeAssistantDiscoveryService : IHostedService
         string? EntityCategory = null,
         bool HasValueTemplate = true);
 
+    // Bucket-Key (Huawei:PollGroups[].Device) -> HA-Gerätegruppierung. Presentation-
+    // Metadaten (Hersteller/Modell), bewusst hier belassen statt in der Config, da
+    // Huawei:PollGroups/DataPoints die Polling-Logik beschreiben, nicht die HA-UI.
+    private static readonly Dictionary<string, HaDevice> HuaweiDevices = new()
+    {
+        ["inverter"] = new("meterbridge_huawei_inverter", "Huawei SUN2000", "Huawei", "SUN2000"),
+        ["meter"] = new("meterbridge_huawei_meter", "Huawei Smartmeter", "Huawei"),
+        ["battery"] = new("meterbridge_huawei_battery", "Huawei LUNA2000", "Huawei", "LUNA2000"),
+    };
+
+    private static HaDevice ResolveHuaweiDevice(string bucket) =>
+        HuaweiDevices.TryGetValue(bucket, out var device) ? device : new HaDevice($"meterbridge_huawei_{bucket}", bucket);
+
     private readonly MqttPublisher _mqtt;
     private readonly IConfiguration _config;
     private readonly ILogger<HomeAssistantDiscoveryService> _logger;
@@ -71,62 +84,19 @@ public sealed class HomeAssistantDiscoveryService : IHostedService
 
     private List<Entity> BuildEntities()
     {
-        var huaweiInverter = new HaDevice("meterbridge_huawei_inverter", "Huawei SUN2000", "Huawei", "SUN2000");
-        var huaweiMeter = new HaDevice("meterbridge_huawei_meter", "Huawei Smartmeter", "Huawei");
-        var huaweiBattery = new HaDevice("meterbridge_huawei_battery", "Huawei LUNA2000", "Huawei", "LUNA2000");
         var gas = new HaDevice("meterbridge_gas", "Gaszähler");
         var strom = new HaDevice("meterbridge_strom", "Stromzähler");
 
-        string inverterTopic = _config["Huawei:Topic"] ?? "tele/huawei/pv";
-        string meterTopic = _config["Huawei:MeterTopic"] ?? "tele/huawei/meter";
-        string batteryTopic = _config["Huawei:BatteryTopic"] ?? "tele/huawei/battery";
         string gasTopic = _config["GasMeter:Topic"] ?? "tele/gaszaehler/pv";
         string gasSetTopic = _config["GasMeter:SetTopic"] ?? "cmnd/gaszaehler/zaehlerstand";
         string stromTopic = _config["Stromzaehler:Topic"] ?? "tele/stromzaehler/pv";
-        int pvStringCount = int.Parse(_config["Huawei:PvStringCount"] ?? "2");
+
+        var huaweiPollGroups = _config.GetSection("Huawei:PollGroups").Get<List<HuaweiPollGroupConfig>>() ?? [];
+        var huaweiDataPoints = _config.GetSection("Huawei:DataPoints").Get<List<HuaweiDataPointConfig>>() ?? [];
+        var huaweiGroupsByName = huaweiPollGroups.ToDictionary(g => g.Name);
 
         var list = new List<Entity>
         {
-            // --- Inverter ---
-            new("input_power_kw", "PV Eingangsleistung", inverterTopic, "input_power_kw", huaweiInverter, "kW", "power", "measurement"),
-            new("line_v_ab", "Netzspannung AB", inverterTopic, "line_v_ab", huaweiInverter, "V", "voltage", "measurement"),
-            new("line_v_bc", "Netzspannung BC", inverterTopic, "line_v_bc", huaweiInverter, "V", "voltage", "measurement"),
-            new("line_v_ca", "Netzspannung CA", inverterTopic, "line_v_ca", huaweiInverter, "V", "voltage", "measurement"),
-            new("active_power_kw", "Wirkleistung AC", inverterTopic, "active_power_kw", huaweiInverter, "kW", "power", "measurement"),
-            new("power_factor", "Leistungsfaktor", inverterTopic, "power_factor", huaweiInverter, null, "power_factor", "measurement"),
-            new("grid_frequency", "Netzfrequenz", inverterTopic, "grid_frequency", huaweiInverter, "Hz", "frequency", "measurement"),
-            new("internal_temperature_c", "Interne Temperatur", inverterTopic, "internal_temperature_c", huaweiInverter, "°C", "temperature", "measurement"),
-            new("fault_code", "Fehlercode", inverterTopic, "fault_code", huaweiInverter),
-            new("total_yield_kwh", "Gesamtertrag", inverterTopic, "total_yield_kwh", huaweiInverter, "kWh", "energy", "total_increasing"),
-            new("daily_yield_kwh", "Tagesertrag", inverterTopic, "daily_yield_kwh", huaweiInverter, "kWh", "energy", "total_increasing"),
-            new("device_status", "Gerätestatus", inverterTopic, "device_status", huaweiInverter, IsText: true),
-
-            // --- Meter ---
-            new("meter_voltage_a", "Netzspannung A", meterTopic, "voltage_a", huaweiMeter, "V", "voltage", "measurement"),
-            new("meter_voltage_b", "Netzspannung B", meterTopic, "voltage_b", huaweiMeter, "V", "voltage", "measurement"),
-            new("meter_voltage_c", "Netzspannung C", meterTopic, "voltage_c", huaweiMeter, "V", "voltage", "measurement"),
-            new("meter_current_a", "Netzstrom A", meterTopic, "current_a", huaweiMeter, "A", "current", "measurement"),
-            new("meter_current_b", "Netzstrom B", meterTopic, "current_b", huaweiMeter, "A", "current", "measurement"),
-            new("meter_current_c", "Netzstrom C", meterTopic, "current_c", huaweiMeter, "A", "current", "measurement"),
-            new("meter_active_power_w", "Netzleistung (Meter)", meterTopic, "active_power_w", huaweiMeter, "W", "power", "measurement"),
-            new("meter_power_factor", "Leistungsfaktor (Meter)", meterTopic, "power_factor", huaweiMeter, null, "power_factor", "measurement"),
-            new("meter_grid_frequency", "Netzfrequenz (Meter)", meterTopic, "grid_frequency", huaweiMeter, "Hz", "frequency", "measurement"),
-            new("meter_exported_kwh", "Einspeisung gesamt (Meter)", meterTopic, "exported_kwh", huaweiMeter, "kWh", "energy", "total_increasing"),
-            new("meter_imported_kwh", "Bezug gesamt (Meter)", meterTopic, "imported_kwh", huaweiMeter, "kWh", "energy", "total_increasing"),
-            new("meter_status", "Meter-Status (Rohcode)", meterTopic, "status", huaweiMeter, EntityCategory: "diagnostic"),
-
-            // --- Battery ---
-            new("battery_charge_discharge_kw", "Lade-/Entladeleistung", batteryTopic, "charge_discharge_power_kw", huaweiBattery, "kW", "power", "measurement"),
-            new("battery_bus_voltage", "Busspannung", batteryTopic, "bus_voltage", huaweiBattery, "V", "voltage", "measurement"),
-            new("battery_soc", "Ladezustand (SOC)", batteryTopic, "soc_percent", huaweiBattery, "%", "battery", "measurement"),
-            new("battery_daily_charge_kwh", "Tagesladung", batteryTopic, "daily_charge_kwh", huaweiBattery, "kWh", "energy", "total_increasing"),
-            new("battery_daily_discharge_kwh", "Tagesentladung", batteryTopic, "daily_discharge_kwh", huaweiBattery, "kWh", "energy", "total_increasing"),
-            new("battery_bus_current", "Busstrom", batteryTopic, "bus_current", huaweiBattery, "A", "current", "measurement"),
-            new("battery_temperature_c", "Batterietemperatur", batteryTopic, "battery_temperature_c", huaweiBattery, "°C", "temperature", "measurement"),
-            new("battery_total_charge_kwh", "Gesamtladung", batteryTopic, "total_charge_kwh", huaweiBattery, "kWh", "energy", "total_increasing"),
-            new("battery_total_discharge_kwh", "Gesamtentladung", batteryTopic, "total_discharge_kwh", huaweiBattery, "kWh", "energy", "total_increasing"),
-            new("battery_running_status", "Batteriestatus", batteryTopic, "running_status_text", huaweiBattery, IsText: true),
-
             // --- Gaszähler ---
             new("gas_verbrauch_m3", "Gasverbrauch gesamt", gasTopic, "verbrauch_m3", gas, "m³", "gas", "total_increasing"),
             new("gas_pulse_count", "Gaszähler Impulse", gasTopic, "pulse_count", gas),
@@ -139,21 +109,66 @@ public sealed class HomeAssistantDiscoveryService : IHostedService
             new("strom_verbrauch_w", "Momentanleistung", stromTopic, "Verbrauch", strom, "W", "power", "measurement"),
         };
 
-        // PV-Strings dynamisch je nach konfigurierter Anzahl
-        for (int n = 1; n <= pvStringCount; n++)
+        // --- Huawei: dynamisch aus Huawei:DataPoints/PollGroups generiert ---
+        // Jeder Datenpunkt wird 1:1 zu einer Entity; Topic/HA-Device kommen von
+        // der referenzierten Abrufgruppe. Neue/geänderte Datenpunkte in
+        // appsettings.json erscheinen so automatisch in Home Assistant, ohne
+        // dass diese Datei angefasst werden muss.
+        foreach (var dp in huaweiDataPoints)
         {
-            list.Add(new($"pv{n}_voltage", $"PV String {n} Spannung", inverterTopic, $"pv{n}_voltage", huaweiInverter, "V", "voltage", "measurement"));
-            list.Add(new($"pv{n}_current", $"PV String {n} Strom", inverterTopic, $"pv{n}_current", huaweiInverter, "A", "current", "measurement"));
+            if (!huaweiGroupsByName.TryGetValue(dp.Group, out var group))
+            {
+                _logger.LogWarning("Huawei-Datenpunkt {Name} referenziert unbekannte Abrufgruppe {Group}, wird übersprungen", dp.Name, dp.Group);
+                continue;
+            }
+
+            list.Add(new(
+                dp.HaObjectId ?? dp.Name,
+                dp.Label ?? dp.Name,
+                group.Topic,
+                dp.Name,
+                ResolveHuaweiDevice(group.Device),
+                dp.Unit,
+                dp.DeviceClass,
+                dp.StateClass,
+                EntityCategory: dp.EntityCategory));
+        }
+
+        // Abgeleitete Text-Entities ohne eigenes Register: nur emittiert, wenn der
+        // zugrunde liegende Rohcode-Datenpunkt in der Config existiert. Object-Ids/
+        // Namen hier hartcodiert, um die Bestands-unique_ids zu erhalten - analog zu
+        // den ebenfalls hartcodiert belassenen Status-Code-Dictionaries in
+        // HuaweiModbusService.
+        var deviceStatusSource = huaweiDataPoints.FirstOrDefault(d => d.Name == "device_status_code");
+        if (deviceStatusSource is not null && huaweiGroupsByName.TryGetValue(deviceStatusSource.Group, out var inverterGroup))
+        {
+            list.Add(new("device_status", "Gerätestatus", inverterGroup.Topic, "device_status",
+                ResolveHuaweiDevice(inverterGroup.Device), IsText: true));
+        }
+
+        var runningStatusSource = huaweiDataPoints.FirstOrDefault(d => d.Name == "running_status");
+        if (runningStatusSource is not null && huaweiGroupsByName.TryGetValue(runningStatusSource.Group, out var batteryGroup))
+        {
+            list.Add(new("battery_running_status", "Batteriestatus", batteryGroup.Topic, "running_status_text",
+                ResolveHuaweiDevice(batteryGroup.Device), IsText: true));
         }
 
         // --- Diagnose: Zeitstempel letztes erfolgreiches/fehlerhaftes Auslesen ---
         // Eigene Topics ({topic}/last_success, {topic}/last_error) mit reinem
         // Zeitstempel-String als Payload - kein value_template nötig.
+        foreach (var group in huaweiPollGroups)
+        {
+            string prefix = $"huawei_{group.Name.ToLowerInvariant()}";
+            var device = ResolveHuaweiDevice(group.Device);
+
+            list.Add(new($"{prefix}_last_success", "Letztes erfolgreiches Auslesen", $"{group.Topic}/last_success", "", device,
+                DeviceClass: "timestamp", EntityCategory: "diagnostic", HasValueTemplate: false));
+            list.Add(new($"{prefix}_last_error", "Letzter Fehler beim Auslesen", $"{group.Topic}/last_error", "", device,
+                DeviceClass: "timestamp", EntityCategory: "diagnostic", HasValueTemplate: false));
+        }
+
         foreach (var (prefix, topic, device) in new[]
         {
-            ("huawei_inverter", inverterTopic, huaweiInverter),
-            ("huawei_meter", meterTopic, huaweiMeter),
-            ("huawei_battery", batteryTopic, huaweiBattery),
             ("gas", gasTopic, gas),
             ("strom", stromTopic, strom),
         })
@@ -163,7 +178,7 @@ public sealed class HomeAssistantDiscoveryService : IHostedService
 
             // Gaszähler hat aktuell keinen definierten Fehlerfall (reine GPIO-
             // Pulszählung, kein Verbindungsaufbau der fehlschlagen könnte) -
-            // last_error entsprechend nur für die anderen vier anlegen.
+            // last_error entsprechend nur für Stromzähler anlegen.
             if (prefix != "gas")
             {
                 list.Add(new($"{prefix}_last_error", "Letzter Fehler beim Auslesen", $"{topic}/last_error", "", device,
@@ -177,7 +192,7 @@ public sealed class HomeAssistantDiscoveryService : IHostedService
 
         return list.Where(e => e.Device.Id switch
         {
-            "meterbridge_huawei_inverter" or "meterbridge_huawei_meter" or "meterbridge_huawei_battery" => huaweiEnabled,
+            _ when e.Device.Id.StartsWith("meterbridge_huawei_") => huaweiEnabled,
             "meterbridge_gas" => gasEnabled,
             "meterbridge_strom" => stromEnabled,
             _ => true,
