@@ -141,6 +141,7 @@ public sealed class HuaweiModbusService : BackgroundService
     #endregion
 
     private readonly MqttPublisher _mqtt;
+    private readonly IConfiguration _config;
     private readonly ILogger<HuaweiModbusService> _logger;
     private readonly string _dongleIp;
     private readonly int _port;
@@ -157,6 +158,7 @@ public sealed class HuaweiModbusService : BackgroundService
     public HuaweiModbusService(MqttPublisher mqtt, IConfiguration config, ILogger<HuaweiModbusService> logger)
     {
         _mqtt = mqtt;
+        _config = config;
         _logger = logger;
         _dongleIp = config["Huawei:DongleIp"] ?? "192.168.200.1";
         _port = int.Parse(config["Huawei:Port"] ?? "502");
@@ -172,6 +174,13 @@ public sealed class HuaweiModbusService : BackgroundService
     {
         while (!stoppingToken.IsCancellationRequested)
         {
+            if (!_config.GetValue("Huawei:Enabled", true))
+            {
+                DisposeConnection();
+                await Task.Delay(TimeSpan.FromSeconds(5), stoppingToken);
+                continue;
+            }
+
             try
             {
                 await EnsureConnectedAsync(stoppingToken);

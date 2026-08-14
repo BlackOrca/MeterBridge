@@ -27,6 +27,7 @@ public sealed class GasMeterService : BackgroundService
     private readonly record struct State(long PulseCount, double OffsetM3);
 
     private readonly MqttPublisher _mqtt;
+    private readonly IConfiguration _config;
     private readonly ILogger<GasMeterService> _logger;
     private readonly int _pin;
     private readonly double _m3PerPulse;
@@ -45,6 +46,7 @@ public sealed class GasMeterService : BackgroundService
     public GasMeterService(MqttPublisher mqtt, IConfiguration config, ILogger<GasMeterService> logger)
     {
         _mqtt = mqtt;
+        _config = config;
         _logger = logger;
         _pin = int.Parse(config["GasMeter:GpioPin"] ?? "17");
         _m3PerPulse = double.Parse(config["GasMeter:CubicMetersPerPulse"] ?? "0.01", CultureInfo.InvariantCulture);
@@ -112,6 +114,12 @@ public sealed class GasMeterService : BackgroundService
         // asynchron im GPIO-Callback oben, unabhängig von diesem Intervall.
         while (!stoppingToken.IsCancellationRequested)
         {
+            if (!_config.GetValue("GasMeter:Enabled", true))
+            {
+                await Task.Delay(TimeSpan.FromSeconds(5), stoppingToken);
+                continue;
+            }
+
             long currentCount;
             double currentOffset;
             lock (_lock)

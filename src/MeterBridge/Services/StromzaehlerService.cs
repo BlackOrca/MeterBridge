@@ -41,6 +41,7 @@ public sealed class StromzaehlerService : BackgroundService
     };
 
     private readonly MqttPublisher _mqtt;
+    private readonly IConfiguration _config;
     private readonly ILogger<StromzaehlerService> _logger;
     private readonly string _portName;
     private readonly int _baudRate;
@@ -49,6 +50,7 @@ public sealed class StromzaehlerService : BackgroundService
     public StromzaehlerService(MqttPublisher mqtt, IConfiguration config, ILogger<StromzaehlerService> logger)
     {
         _mqtt = mqtt;
+        _config = config;
         _logger = logger;
         _portName = config["Stromzaehler:SerialPort"] ?? "/dev/ttyUSB0";
         _baudRate = int.Parse(config["Stromzaehler:BaudRate"] ?? "9600");
@@ -59,6 +61,12 @@ public sealed class StromzaehlerService : BackgroundService
     {
         while (!stoppingToken.IsCancellationRequested)
         {
+            if (!_config.GetValue("Stromzaehler:Enabled", true))
+            {
+                await Task.Delay(TimeSpan.FromSeconds(5), stoppingToken);
+                continue;
+            }
+
             try
             {
                 await ReadLoopAsync(stoppingToken);
@@ -94,6 +102,12 @@ public sealed class StromzaehlerService : BackgroundService
 
         while (!stoppingToken.IsCancellationRequested)
         {
+            if (!_config.GetValue("Stromzaehler:Enabled", true))
+            {
+                _logger.LogInformation("Stromzähler deaktiviert, schließe IR-Lesekopf");
+                return;
+            }
+
             int n;
             try
             {

@@ -171,7 +171,17 @@ public sealed class HomeAssistantDiscoveryService : IHostedService
             }
         }
 
-        return list;
+        bool huaweiEnabled = _config.GetValue("Huawei:Enabled", true);
+        bool gasEnabled = _config.GetValue("GasMeter:Enabled", true);
+        bool stromEnabled = _config.GetValue("Stromzaehler:Enabled", true);
+
+        return list.Where(e => e.Device.Id switch
+        {
+            "meterbridge_huawei_inverter" or "meterbridge_huawei_meter" or "meterbridge_huawei_battery" => huaweiEnabled,
+            "meterbridge_gas" => gasEnabled,
+            "meterbridge_strom" => stromEnabled,
+            _ => true,
+        }).ToList();
     }
 
     private static Dictionary<string, object> BuildDiscoveryPayload(Entity e)
