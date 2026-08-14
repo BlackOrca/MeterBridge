@@ -27,6 +27,13 @@ services:
       # legt Docker hier sonst ein Verzeichnis an und der Zählerstand wird
       # nie persistiert (Fehler landet nur als Warning im Log).
       - ./gasmeter_state.json:/app/data/gasmeter_state.json:rw
+      # Docker mountet /sys im Container standardmäßig read-only, auch als
+      # root - der GasMeterService braucht aber Schreibzugriff auf das
+      # (deprecated, aber auf dem Pi weiterhin vorhandene) sysfs-GPIO-
+      # Interface, um Flankenwechsel am Impulskontakt registrieren zu
+      # können (System.Device.Gpio nutzt dafür /sys/class/gpio, nicht
+      # /dev/gpiochip0). Gezielter Bind-Mount statt privileged: true.
+      - /sys/class/gpio:/sys/class/gpio:rw
     environment:
       - TZ=Europe/Berlin
       - GasMeter__StateFilePath=/app/data/gasmeter_state.json
