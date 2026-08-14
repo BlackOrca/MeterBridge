@@ -56,15 +56,25 @@ $newVersion = "$majorNum.$minorNum.$patchNum"
 
 Write-Host "Baue MeterBridge $newVersion (linux-$Arch) und pushe nach ghcr.io/blackorca/meterbridge ..." -ForegroundColor Cyan
 
-dotnet publish $csproj `
-    -c Release `
-    -r "linux-$Arch" `
-    --self-contained false `
-    -t:PublishContainer `
-    -p:ContainerImageTags="$newVersion;latest"
+# ContainerImageTags (mehrere Tags in einem Property-Wert, durch ";"
+# getrennt) lässt sich von PowerShell aus nicht zuverlässig als ein
+# einzelnes Kommandozeilen-Argument durchreichen: MSBuilds "-p:"-Parser
+# trennt an ";" (mehrere Properties pro Schalter), und %3B-Escaping
+# verhindert zwar das, blockiert aber gleichzeitig auch die SDK-interne
+# Aufsplittung von ContainerImageTags in einzelne Tags. Deshalb hier zwei
+# separate Publish-Läufe mit je einem einzelnen ContainerImageTag - keine
+# Semikolons im Spiel, keine Mehrdeutigkeit.
+foreach ($tag in @($newVersion, 'latest')) {
+    dotnet publish $csproj `
+        -c Release `
+        -r "linux-$Arch" `
+        --self-contained false `
+        -t:PublishContainer `
+        -p:ContainerImageTag=$tag
 
-if ($LASTEXITCODE -ne 0) {
-    throw "dotnet publish ist fehlgeschlagen (Exit Code $LASTEXITCODE) - VERSION bleibt bei $current."
+    if ($LASTEXITCODE -ne 0) {
+        throw "dotnet publish (Tag '$tag') ist fehlgeschlagen (Exit Code $LASTEXITCODE) - VERSION bleibt bei $current."
+    }
 }
 
 Set-Content -Path $versionFile -Value $newVersion -NoNewline -Encoding utf8

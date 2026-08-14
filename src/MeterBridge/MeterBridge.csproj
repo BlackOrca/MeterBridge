@@ -16,7 +16,10 @@
   <PropertyGroup>
     <ContainerRegistry>ghcr.io</ContainerRegistry>
     <ContainerRepository>blackorca/meterbridge</ContainerRepository>
-    <ContainerImageTag>latest</ContainerImageTag>
+    <!-- Kein fester ContainerImageTag hier: SDK-Container erlauben nicht
+         gleichzeitig ContainerImageTag UND ContainerImageTags gesetzt.
+         scripts/build-push.ps1 übergibt ContainerImageTags bei jedem Lauf
+         per -p:, das reicht für den vorgesehenen Workflow. -->
     <!-- root, damit der Container ohne GID-Abgleich auf GPIO/seriellen Port
          des Host-Systems zugreifen kann (Geräte werden gezielt per
          compose.yml devices: durchgereicht, ohne den privileged-Modus). -->
