@@ -32,12 +32,15 @@ public sealed class GasMeterService : BackgroundService
     private readonly int _pin;
     private readonly double _m3PerPulse;
     private readonly int _debounceMs;
+    private readonly int _pollIntervalMs;
     private readonly string _stateFilePath;
     private readonly string _topic;
     private readonly string _setTopic;
     private readonly double _configDefaultOffsetM3;
 
     private GpioController? _controller;
+    private CancellationTokenSource? _pollCts;
+    private Task? _pollTask;
     private long _pulseCount;
     private double _offsetM3;
     private DateTime _lastPulseUtc = DateTime.MinValue;
@@ -51,6 +54,7 @@ public sealed class GasMeterService : BackgroundService
         _pin = int.Parse(config["GasMeter:GpioPin"] ?? "17");
         _m3PerPulse = double.Parse(config["GasMeter:CubicMetersPerPulse"] ?? "0.01", CultureInfo.InvariantCulture);
         _debounceMs = int.Parse(config["GasMeter:DebounceMilliseconds"] ?? "100");
+        _pollIntervalMs = int.Parse(config["GasMeter:PollIntervalMilliseconds"] ?? "5");
         _stateFilePath = config["GasMeter:StateFilePath"] ?? "gasmeter_state.json";
         _topic = config["GasMeter:Topic"] ?? "tele/gaszaehler/pv";
         _setTopic = config["GasMeter:SetTopic"] ?? "cmnd/gaszaehler/zaehlerstand";
@@ -61,9 +65,18 @@ public sealed class GasMeterService : BackgroundService
     {
         LoadState();
 
+        // Impulse werden per Polling statt per GPIO-Interrupt erkannt: Das
+        // sysfs-Interrupt-Interface, das System.Device.Gpio dafür intern
+        // nutzt (/sys/class/gpio/gpioN/edge), ist auf aktuellen Raspberry Pi
+        // OS-Versionen (Bookworm+) unzuverlässig - die udev-Regel, die die
+        // Zugriffsrechte auf frisch exportierte Pins setzt, fehlt dort, was
+        // zu einem Timeout beim Start führt. Direktes Lesen über
+        // /dev/gpiomem funktioniert dagegen weiterhin problemlos.
         _controller = new GpioController();
         _controller.OpenPin(_pin, PinMode.InputPullUp);
-        _controller.RegisterCallbackForPinValueChangedEvent(_pin, PinEventTypes.Falling, OnPulse);
+
+        _pollCts = new CancellationTokenSource();
+        _pollTask = Task.Run(() => PollPinAsync(_pollCts.Token));
 
         await _mqtt.SubscribeAsync(_setTopic, OnSetZaehlerstandAsync, cancellationToken);
 
@@ -94,7 +107,30 @@ public sealed class GasMeterService : BackgroundService
         return Task.CompletedTask;
     }
 
-    private void OnPulse(object sender, PinValueChangedEventArgs args)
+    private async Task PollPinAsync(CancellationToken token)
+    {
+        var previous = _controller!.Read(_pin);
+        while (!token.IsCancellationRequested)
+        {
+            try
+            {
+                await Task.Delay(_pollIntervalMs, token);
+            }
+            catch (OperationCanceledException)
+            {
+                return;
+            }
+
+            var current = _controller.Read(_pin);
+            if (previous == PinValue.High && current == PinValue.Low)
+            {
+                OnPulse();
+            }
+            previous = current;
+        }
+    }
+
+    private void OnPulse()
     {
         lock (_lock)
         {
@@ -178,9 +214,19 @@ public sealed class GasMeterService : BackgroundService
         }
     }
 
-    public override Task StopAsync(CancellationToken cancellationToken)
+    public override async Task StopAsync(CancellationToken cancellationToken)
     {
+        if (_pollCts is not null)
+        {
+            await _pollCts.CancelAsync();
+            if (_pollTask is not null)
+            {
+                await _pollTask;
+            }
+            _pollCts.Dispose();
+        }
+
         _controller?.Dispose();
-        return base.StopAsync(cancellationToken);
+        await base.StopAsync(cancellationToken);
     }
 }
