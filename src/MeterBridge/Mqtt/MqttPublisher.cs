@@ -2,6 +2,7 @@ using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.Logging;
 using MQTTnet;
 using MQTTnet.Client;
+using MQTTnet.Protocol;
 
 namespace MeterBridge.Mqtt;
 
@@ -13,12 +14,23 @@ namespace MeterBridge.Mqtt;
 /// </summary>
 public sealed class MqttPublisher : IAsyncDisposable
 {
+    private const string AvailabilityOnline = "online";
+    private const string AvailabilityOffline = "offline";
+
     private readonly IMqttClient _client;
     private readonly MqttClientOptions _options;
     private readonly ILogger<MqttPublisher> _logger;
     private readonly SemaphoreSlim _connectLock = new(1, 1);
     private readonly Dictionary<string, Func<string, Task>> _subscriptions = new();
     private bool _receivedHandlerRegistered;
+
+    /// <summary>
+    /// Bridge-weites Online/Offline-Topic, das von HomeAssistantDiscoveryService als
+    /// availability_topic in jede Entity eingetragen wird. Wird als Last-Will beim
+    /// Verbindungsaufbau hinterlegt (greift bei Absturz/Verbindungsverlust) und bei
+    /// jedem (Re-)Connect sowie beim geordneten Beenden aktiv gesetzt.
+    /// </summary>
+    public string AvailabilityTopic { get; }
 
     public MqttPublisher(IConfiguration config, ILogger<MqttPublisher> logger)
     {
@@ -29,6 +41,7 @@ public sealed class MqttPublisher : IAsyncDisposable
         var clientId = config["Mqtt:ClientId"] ?? "meter-bridge-pi";
         var username = config["Mqtt:Username"];
         var password = config["Mqtt:Password"];
+        AvailabilityTopic = config["Mqtt:AvailabilityTopic"] ?? "meterbridge/bridge/status";
 
         var factory = new MqttFactory();
         _client = factory.CreateMqttClient();
@@ -36,7 +49,11 @@ public sealed class MqttPublisher : IAsyncDisposable
         var optionsBuilder = new MqttClientOptionsBuilder()
             .WithTcpServer(host, port)
             .WithClientId(clientId)
-            .WithCleanSession();
+            .WithCleanSession()
+            .WithWillTopic(AvailabilityTopic)
+            .WithWillPayload(AvailabilityOffline)
+            .WithWillRetain(true)
+            .WithWillQualityOfServiceLevel(MqttQualityOfServiceLevel.AtLeastOnce);
 
         if (!string.IsNullOrEmpty(username))
         {
@@ -63,6 +80,16 @@ public sealed class MqttPublisher : IAsyncDisposable
 
             _logger.LogInformation("Verbinde zum MQTT-Broker...");
             await _client.ConnectAsync(_options, cancellationToken);
+
+            // Birth-Message: aktiv "online" setzen (retained), das Last-Will allein
+            // greift nur beim ungeordneten Verbindungsabbruch, nicht direkt nach dem
+            // Connect - ohne dies bliebe der Status auf einem frischen Broker leer.
+            var birthMessage = new MqttApplicationMessageBuilder()
+                .WithTopic(AvailabilityTopic)
+                .WithPayload(AvailabilityOnline)
+                .WithRetainFlag(true)
+                .Build();
+            await _client.PublishAsync(birthMessage, cancellationToken);
 
             // Nach (Re-)Connect alle bisherigen Subscriptions erneuern, da diese
             // beim Neuverbinden sonst verloren gehen (z.B. nach Broker-Neustart).
@@ -145,6 +172,23 @@ public sealed class MqttPublisher : IAsyncDisposable
     {
         if (_client.IsConnected)
         {
+            // Bei geordnetem Beenden greift das Last-Will nicht (das feuert nur bei
+            // ungeordnetem Verbindungsabbruch) - "offline" daher hier aktiv setzen,
+            // damit HA den Bridge-Status auch nach einem sauberen Stop korrekt zeigt.
+            try
+            {
+                var offlineMessage = new MqttApplicationMessageBuilder()
+                    .WithTopic(AvailabilityTopic)
+                    .WithPayload(AvailabilityOffline)
+                    .WithRetainFlag(true)
+                    .Build();
+                await _client.PublishAsync(offlineMessage);
+            }
+            catch (Exception ex)
+            {
+                _logger.LogWarning(ex, "Konnte Offline-Status beim Beenden nicht mehr senden");
+            }
+
             await _client.DisconnectAsync();
         }
         _client.Dispose();

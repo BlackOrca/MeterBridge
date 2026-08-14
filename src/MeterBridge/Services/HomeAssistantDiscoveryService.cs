@@ -36,7 +36,8 @@ public sealed class HomeAssistantDiscoveryService : IHostedService
         double? Max = null,
         double? Step = null,
         string? EntityCategory = null,
-        bool HasValueTemplate = true);
+        bool HasValueTemplate = true,
+        bool Enabled = true);
 
     // Bucket-Key (Huawei:PollGroups[].Device) -> HA-Gerätegruppierung. Presentation-
     // Metadaten (Hersteller/Modell), bewusst hier belassen statt in der Config, da
@@ -70,13 +71,29 @@ public sealed class HomeAssistantDiscoveryService : IHostedService
         await Task.Delay(TimeSpan.FromSeconds(3), cancellationToken);
 
         var entities = BuildEntities();
-        _logger.LogInformation("Sende {Count} Home-Assistant-Discovery-Configs", entities.Count);
+        int enabledCount = entities.Count(e => e.Enabled);
+        int disabledCount = entities.Count - enabledCount;
+        _logger.LogInformation(
+            "Sende {Count} Home-Assistant-Discovery-Configs ({Disabled} deaktivierte Entities werden bereinigt)",
+            enabledCount, disabledCount);
 
         foreach (var e in entities)
         {
-            var payload = BuildDiscoveryPayload(e);
             string topic = $"homeassistant/{e.Component}/{e.Device.Id}/{e.ObjectId}/config";
-            await _mqtt.PublishJsonAsync(topic, JsonSerializer.Serialize(payload), cancellationToken, retain: true);
+
+            if (e.Enabled)
+            {
+                var payload = BuildDiscoveryPayload(e);
+                await _mqtt.PublishJsonAsync(topic, JsonSerializer.Serialize(payload), cancellationToken, retain: true);
+            }
+            else
+            {
+                // Leeres retained Payload löscht eine zuvor angelegte Discovery-Config
+                // wieder aus HA (z.B. wenn Huawei:Enabled/GasMeter:Enabled/Stromzaehler:Enabled
+                // nachträglich auf false gesetzt wurde) - sonst blieben verwaiste Entities
+                // dauerhaft mit dem letzten bekannten Wert in HA stehen.
+                await _mqtt.PublishJsonAsync(topic, "", cancellationToken, retain: true);
+            }
         }
     }
 
@@ -190,16 +207,22 @@ public sealed class HomeAssistantDiscoveryService : IHostedService
         bool gasEnabled = _config.GetValue("GasMeter:Enabled", true);
         bool stromEnabled = _config.GetValue("Stromzaehler:Enabled", true);
 
-        return list.Where(e => e.Device.Id switch
+        // Deaktivierte Entities werden nicht mehr herausgefiltert, sondern nur
+        // markiert (Enabled = false) - StartAsync braucht sie weiterhin, um deren
+        // ggf. bereits retained Discovery-Config aktiv zu entfernen (s.u.).
+        return list.Select(e => e with
         {
-            _ when e.Device.Id.StartsWith("meterbridge_huawei_") => huaweiEnabled,
-            "meterbridge_gas" => gasEnabled,
-            "meterbridge_strom" => stromEnabled,
-            _ => true,
+            Enabled = e.Device.Id switch
+            {
+                _ when e.Device.Id.StartsWith("meterbridge_huawei_") => huaweiEnabled,
+                "meterbridge_gas" => gasEnabled,
+                "meterbridge_strom" => stromEnabled,
+                _ => true,
+            },
         }).ToList();
     }
 
-    private static Dictionary<string, object> BuildDiscoveryPayload(Entity e)
+    private Dictionary<string, object> BuildDiscoveryPayload(Entity e)
     {
         var payload = new Dictionary<string, object>
         {
@@ -207,6 +230,10 @@ public sealed class HomeAssistantDiscoveryService : IHostedService
             ["unique_id"] = $"{e.Device.Id}_{e.ObjectId}",
             ["state_topic"] = e.StateTopic,
             ["device"] = BuildDeviceBlock(e.Device),
+            // Bridge-weites Online/Offline-Topic (Last-Will + Birth-Message in
+            // MqttPublisher) - ohne dies zeigt HA nie "nicht verfügbar" an, selbst
+            // wenn der MeterBridge-Prozess abgestürzt oder offline ist.
+            ["availability_topic"] = _mqtt.AvailabilityTopic,
         };
 
         if (e.HasValueTemplate)
